@@ -1,0 +1,159 @@
+const expressAsyncHandler = require('express-async-handler');
+const UserModel = require('../../models/users.model');
+const bcrypt = require('bcryptjs');
+const isValidEmail = require('../../utils/emailValidator');
+const { generateToken } = require('../../utils/handleToken');
+const jwt = require('jsonwebtoken');
+const appData = require('../../utils/variables');
+
+const register = expressAsyncHandler(async (req, res) => {
+  try {
+    const email = req?.body?.email?.toLowerCase()?.trim();
+    const full_name = req?.body?.full_name?.toLowerCase()?.trim();
+    const password = req?.body?.password;
+    const username = req?.body?.username?.toLowerCase()?.trim();
+
+    const userExist = await UserModel.findOne({ email });
+
+    if (userExist) {
+      return res
+        .status(400)
+        .json({ message: 'User already exist.Please login' });
+    }
+
+    // VALIDATE EMAIL
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    // HASH PASSWORD
+
+    const salt = await bcrypt.genSalt();
+    const passwordHarsh = await bcrypt.hash(password, salt);
+
+    // CREATE NEW USER
+    const newUser = await UserModel.create({
+      full_name,
+      password: passwordHarsh,
+      email,
+      username,
+    });
+
+    delete newUser?.password;
+
+    return res.status(200).json({ userData: newUser, message: 'success' });
+  } catch (error) {
+    res.status(500).json({ error });
+  }
+});
+
+const login = expressAsyncHandler(async (req, res) => {
+  try {
+    const email = req.body.email.toLowerCase().trim();
+    const password = req.body?.password;
+
+    // VALIDATE EMAIL
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    const userDoc = await UserModel.findOne({ email });
+    if (!userDoc) {
+      return res
+        .status(400)
+        .json({ message: 'User does not exit, please signUp' });
+    }
+
+    // COMPARE PASSWORD
+
+    const comparePassword = bcrypt.compareSync(password, userDoc?.password);
+
+    if (comparePassword) {
+      const token = generateToken(userDoc._id);
+      return res.status(200).json({
+        userDoc,
+        token,
+        message: 'Logged In Successfully',
+      });
+    } else {
+      return res.status(400).json({ message: 'Wrong Credentials' });
+    }
+  } catch (error) {
+    res.status(500).json(error?.message);
+  }
+});
+
+// FORGOT PASSWORD
+
+const forgotPassword = expressAsyncHandler(async (req, res) => {
+  try {
+    const { email } = req?.body;
+
+    const findUserEmail = await UserModel.findOne({ email });
+
+    if (!findUserEmail) {
+      res.status(400);
+      throw new Error('Email cannot be found. Please check your typography.');
+    }
+
+    const user = {
+      userEmail: findUserEmail?.email,
+      token: generateToken.generateToken(findUserEmail),
+    };
+
+    return res.send({
+      message:
+        "A password reset Link has been sent to the email you provided. Check your email inbox but if you can't find it, check your spam folder",
+    });
+  } catch (error) {
+    throw new Error(
+      error?.message || 'There is a problem trying to reset your password'
+    );
+  }
+});
+
+const resetPassword = expressAsyncHandler(async (req, res) => {
+  try {
+    const { password, token } = req.body;
+    if (password.split('') < 6) {
+      res.status(400);
+      throw new Error(
+        'Your password is weak. Make sure your password is more than 6.'
+      );
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await UserModel.findOne({
+      email: decoded?.fieldToSecure?.email,
+    });
+
+    // HASH PASSWORD
+
+    const salt = await bcrypt.genSalt();
+    const passwordHarsh = await bcrypt.hash(password, salt);
+    user.password = passwordHarsh;
+    const saved = await user.save();
+
+    if (!saved) {
+      res.status(500);
+      throw new Error(
+        'Something went wrong. Please start the whole process again.'
+      );
+    }
+
+    res.send({ message: 'Your password has been reset successfully.' });
+  } catch (error) {
+    res.status(500);
+    throw new Error(
+      'It seems that your link has expired. Please start the whole process again and complete it as soon as possible.'
+    );
+  }
+});
+
+module.exports = {
+  register,
+  login,
+  forgotPassword,
+  resetPassword,
+};
